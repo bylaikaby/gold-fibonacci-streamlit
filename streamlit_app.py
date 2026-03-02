@@ -398,16 +398,55 @@ class FibonacciAnalyzer:
     
     def _find_pivot_points(self, window: int = 5):
         """
-        使用Pivot Point算法识别波段点
+        使用 Pivot Point (枢轴点) 算法识别波段点
+        
+        【什么是 Pivot Point 算法？】
+        Pivot Point 是一种技术分析方法，用于识别价格走势中的关键转折点（高点/低点）。
+        
+        【算法原理】
+        对于每一个数据点，查看它前后各 window 个数据点（共 2*window+1 个点）：
+        - Pivot High: 如果当前高点是这 2*window+1 个点中的最高点 → 认定为波段高点
+        - Pivot Low:  如果当前低点是这 2*window+1 个点中的最低点 → 认定为波段低点
+        
+        【举例说明】window=5 时:
+        
+        价格:    100 ── 105 ── 110 ── 108 ── 115 ── [120] ── 118 ── 112 ── 108 ── 105 ── 100
+        位置:      1     2     3     4     5      6      7     8     9     10     11
+        
+        检查位置6（当前高点120）:
+        - 前5个点: 100, 105, 110, 108, 115 (最高115)
+        - 当前点: 120
+        - 后5个点: 118, 112, 108, 105, 100 (最高118)
+        - 120 > 115 且 120 > 118 → 这是 Pivot High! ✓
+        
+        【为什么用 Pivot Point？】
+        1. 过滤噪音: 不是每个小波动都算波段点，必须是局部极值
+        2. 识别关键位: 找到真正重要的支撑/阻力位
+        3. 参数可调: window 越大，识别的波段点越少但越重要
+        
+        【参数说明】
+        - window=2: 识别短期波动，点较多
+        - window=5: 识别中期波段，点适中 (默认)
+        - window=10: 识别长期趋势，点较少但更重要
+        
+        【ABC三点识别逻辑】
+        A点: B点之前的最后一个 Pivot Low (起涨点)
+        B点: 最近的 Pivot High (波段高点)
+        C点: B点之后的 Pivot Low (回调低点)
         """
         df = self.df.copy()
         
         # 计算滚动最高/最低
+        # rolling(window=11, center=True) 表示以当前点为中心，前后各5个点
         roll_high = df['High'].rolling(window=window*2+1, center=True).max()
         roll_low = df['Low'].rolling(window=window*2+1, center=True).min()
         
-        # 识别Pivot High/Low
+        # 识别 Pivot High: 当前高点等于滚动最大值
+        # 即: 当前点是前后window个点中的最高点
         pivot_highs = df[df['High'] == roll_high]['High'].dropna()
+        
+        # 识别 Pivot Low: 当前低点等于滚动最小值
+        # 即: 当前点是前后window个点中的最低点
         pivot_lows = df[df['Low'] == roll_low]['Low'].dropna()
         
         if len(pivot_highs) == 0 or len(pivot_lows) == 0:
@@ -1138,9 +1177,24 @@ def main():
         
         # 智能识别设置
         st.subheader("🔍 智能识别设置")
+        
+        with st.expander("📖 Pivot Point 算法说明"):
+            st.markdown("""
+            **Pivot Point (枢轴点) 算法** 用于识别价格走势中的关键转折点。
+            
+            **原理**: 对于每个数据点，查看前后各 N 个点：
+            - 如果当前是这 2N+1 个点中的 **最高** → Pivot High (波段高点)
+            - 如果当前是这 2N+1 个点中的 **最低** → Pivot Low (波段低点)
+            
+            **窗口大小影响**:
+            - 窗口=2: 识别短期波动，点较多
+            - 窗口=5: 识别中期波段，点适中 (推荐)
+            - 窗口=10: 识别长期趋势，点较少但更重要
+            """)
+        
         use_pivot = st.checkbox("使用Pivot算法", value=True, 
-                                help="使用更精确的Pivot Point算法识别波段点")
-        pivot_window = st.slider("Pivot窗口", min_value=2, max_value=10, value=5,
+                                help="使用Pivot Point算法识别波段高低点，比简单极值更精确")
+        pivot_window = st.slider("Pivot窗口大小", min_value=2, max_value=10, value=5,
                                  help="窗口越大，识别的波段点越少但越重要")
         
         st.divider()
