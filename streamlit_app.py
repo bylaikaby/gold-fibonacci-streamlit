@@ -24,7 +24,7 @@ warnings.filterwarnings('ignore')
 
 # 设置页面配置（必须在其他st命令之前）
 st.set_page_config(
-    page_title="🥇 黄金斐波那契分析系统 v4.3",
+    page_title="🥇 黄金斐波那契分析系统 v4.4",
     page_icon="🥇",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1047,13 +1047,66 @@ def generate_signals(current_price, analyzer, metal):
     return text
 
 
+def auto_fetch_data():
+    """自动获取数据（仅在首次加载时）"""
+    if st.session_state.get('auto_fetched', False):
+        return
+    
+    if st.session_state.df is not None:
+        st.session_state.auto_fetched = True
+        return
+    
+    try:
+        metal = st.session_state.current_metal
+        fetcher = st.session_state.fetcher
+        analyzer = st.session_state.analyzer
+        
+        # 默认获取6个月日线数据
+        df = fetcher.get_historical_data(metal, period="6mo", interval="1d")
+        
+        if df is not None and not df.empty:
+            st.session_state.df = df
+            st.session_state.current_price = float(df['Close'].iloc[-1])
+            st.session_state.data_source = fetcher.data_source
+            
+            # 自动识别波段点
+            analyzer.set_data(df)
+            analyzer.find_swing_points(use_pivot=True, pivot_window=5)
+            st.session_state.auto_detected = True
+            
+            # 自动执行回调分析
+            if analyzer.swing_low and analyzer.swing_high:
+                analyzer.calculate_retracement(analyzer.swing_low, analyzer.swing_high)
+                
+                # 如果有C点，也执行扩展分析
+                if analyzer.point_c:
+                    analyzer.calculate_extension(analyzer.swing_low, analyzer.swing_high, analyzer.point_c)
+            
+            st.session_state.auto_fetched = True
+            st.session_state.auto_fetch_success = True
+        else:
+            st.session_state.auto_fetch_success = False
+    except Exception as e:
+        st.session_state.auto_fetch_success = False
+        st.session_state.auto_fetch_error = str(e)
+
+
 def main():
     # 初始化
     init_session_state()
     
+    # 自动获取数据
+    auto_fetch_data()
+    
     # 标题
-    st.title("🥇 黄金斐波那契分析系统 v4.3")
+    st.title("🥇 黄金斐波那契分析系统 v4.4")
     st.caption("完全免费版 - 无需API Key | 智能识别ABC三点 | 数据源: Yahoo Finance / Metals.Live / FreeGoldAPI / Frankfurter")
+    
+    # 显示自动获取状态
+    if st.session_state.get('auto_fetch_success', False):
+        st.success(f"✅ 已自动加载数据 | {st.session_state.current_metal.cn_name} | 数据源: {st.session_state.data_source}")
+    elif st.session_state.get('auto_fetch_success') == False and 'auto_fetch_error' in st.session_state:
+        st.warning(f"⚠️ 自动获取数据失败: {st.session_state.auto_fetch_error} | 请手动点击「获取数据」按钮")
     
     # 侧边栏 - 控制面板
     with st.sidebar:
