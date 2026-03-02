@@ -24,7 +24,7 @@ warnings.filterwarnings('ignore')
 
 # 设置页面配置（必须在其他st命令之前）
 st.set_page_config(
-    page_title="🥇 黄金斐波那契分析系统 v4.2",
+    page_title="🥇 黄金斐波那契分析系统 v4.3",
     page_icon="🥇",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -610,31 +610,68 @@ def init_session_state():
 
 
 def create_fib_chart(df, analyzer, current_price, metal, show_indicators=True, show_abc=True):
-    """创建斐波那契图表"""
+    """创建斐波那契图表 - 优化版"""
     if not HAS_PLOTLY or df is None:
         return None
+    
+    # 获取图表范围
+    y_min = df['Low'].min()
+    y_max = df['High'].max()
+    y_range = y_max - y_min
+    
+    # 如果有斐波那契结果，扩展Y轴范围以显示所有水平线
+    if analyzer.result:
+        all_prices = [info['price'] for info in analyzer.result['levels'].values()]
+        if current_price:
+            all_prices.append(current_price)
+        y_min = min(y_min, min(all_prices)) - y_range * 0.05
+        y_max = max(y_max, max(all_prices)) + y_range * 0.05
+    else:
+        y_min -= y_range * 0.05
+        y_max += y_range * 0.05
     
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.7, 0.3],
+        vertical_spacing=0.08,
+        row_heights=[0.75, 0.25],
         subplot_titles=(f'{metal.cn_name}价格走势', 'RSI指标')
     )
     
     dates = df.index
     closes = df['Close'].values
     
-    # 价格线
-    fig.add_trace(
-        go.Scatter(
-            x=dates, y=closes,
-            name=f'{metal.cn_name} 收盘价',
-            line=dict(color=metal.color, width=1.5),
-            mode='lines'
-        ),
-        row=1, col=1
-    )
+    # 价格线 (蜡烛图或线图)
+    if 'Open' in df.columns and 'High' in df.columns and 'Low' in df.columns:
+        # 使用蜡烛图
+        fig.add_trace(
+            go.Candlestick(
+                x=dates,
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name=f'{metal.cn_name} K线',
+                increasing_line_color='#26A69A',
+                decreasing_line_color='#EF5350',
+                increasing_fillcolor='#26A69A',
+                decreasing_fillcolor='#EF5350'
+            ),
+            row=1, col=1
+        )
+    else:
+        # 使用线图
+        fig.add_trace(
+            go.Scatter(
+                x=dates, y=closes,
+                name=f'{metal.cn_name} 收盘价',
+                line=dict(color=metal.color, width=2),
+                mode='lines',
+                fill='tozeroy',
+                fillcolor=f'rgba(255, 215, 0, 0.1)'
+            ),
+            row=1, col=1
+        )
     
     # 均线
     if show_indicators:
@@ -645,7 +682,8 @@ def create_fib_chart(df, analyzer, current_price, metal, show_indicators=True, s
             go.Scatter(
                 x=dates, y=ma20,
                 name='MA20',
-                line=dict(color='#FF9800', width=1)
+                line=dict(color='#FF9800', width=1.5),
+                opacity=0.8
             ),
             row=1, col=1
         )
@@ -653,95 +691,156 @@ def create_fib_chart(df, analyzer, current_price, metal, show_indicators=True, s
             go.Scatter(
                 x=dates, y=ma50,
                 name='MA50',
-                line=dict(color='#2196F3', width=1)
+                line=dict(color='#2196F3', width=1.5),
+                opacity=0.8
             ),
             row=1, col=1
         )
     
     # 标记 A/B/C 三点
     if show_abc and analyzer.swing_low_date and analyzer.swing_high_date:
-        # A点 - 起涨点 (绿色)
-        if analyzer.swing_low_date in df.index:
-            fig.add_trace(
-                go.Scatter(
-                    x=[analyzer.swing_low_date],
-                    y=[analyzer.swing_low],
-                    mode='markers+text',
-                    name='A点 (起涨)',
-                    marker=dict(size=15, color='#00FF00', symbol='circle'),
-                    text=['A'],
-                    textposition='bottom center',
-                    textfont=dict(size=14, color='#00FF00', weight='bold')
-                ),
-                row=1, col=1
-            )
+        # A点 - 起涨点 (绿色圆圈)
+        fig.add_trace(
+            go.Scatter(
+                x=[analyzer.swing_low_date],
+                y=[analyzer.swing_low],
+                mode='markers+text',
+                name='A点 (起涨)',
+                marker=dict(size=18, color='#00FF00', symbol='circle', 
+                           line=dict(color='white', width=2)),
+                text=['A'],
+                textposition='bottom center',
+                textfont=dict(size=16, color='#00FF00', family='Arial Black')
+            ),
+            row=1, col=1
+        )
         
-        # B点 - 波段高点 (红色)
-        if analyzer.swing_high_date in df.index:
-            fig.add_trace(
-                go.Scatter(
-                    x=[analyzer.swing_high_date],
-                    y=[analyzer.swing_high],
-                    mode='markers+text',
-                    name='B点 (高点)',
-                    marker=dict(size=15, color='#FF0000', symbol='circle'),
-                    text=['B'],
-                    textposition='top center',
-                    textfont=dict(size=14, color='#FF0000', weight='bold')
-                ),
-                row=1, col=1
-            )
+        # B点 - 波段高点 (红色圆圈)
+        fig.add_trace(
+            go.Scatter(
+                x=[analyzer.swing_high_date],
+                y=[analyzer.swing_high],
+                mode='markers+text',
+                name='B点 (高点)',
+                marker=dict(size=18, color='#FF0000', symbol='circle',
+                           line=dict(color='white', width=2)),
+                text=['B'],
+                textposition='top center',
+                textfont=dict(size=16, color='#FF0000', family='Arial Black')
+            ),
+            row=1, col=1
+        )
         
-        # C点 - 回调低点 (蓝色)
-        if analyzer.point_c_date and analyzer.point_c_date in df.index:
+        # C点 - 回调低点 (蓝色菱形)
+        if analyzer.point_c_date:
             fig.add_trace(
                 go.Scatter(
                     x=[analyzer.point_c_date],
                     y=[analyzer.point_c],
                     mode='markers+text',
                     name='C点 (回调)',
-                    marker=dict(size=15, color='#0080FF', symbol='circle'),
+                    marker=dict(size=18, color='#0080FF', symbol='diamond',
+                               line=dict(color='white', width=2)),
                     text=['C'],
                     textposition='bottom center',
-                    textfont=dict(size=14, color='#0080FF', weight='bold')
+                    textfont=dict(size=16, color='#0080FF', family='Arial Black')
                 ),
                 row=1, col=1
             )
         
-        # 画AB连线
+        # 画AB连线 (黄色虚线)
         fig.add_trace(
             go.Scatter(
                 x=[analyzer.swing_low_date, analyzer.swing_high_date],
                 y=[analyzer.swing_low, analyzer.swing_high],
                 mode='lines',
                 name='AB波段',
-                line=dict(color='rgba(255,255,0,0.5)', width=2, dash='dash')
+                line=dict(color='rgba(255,255,0,0.7)', width=2, dash='dash')
             ),
             row=1, col=1
         )
+        
+        # 画BC连线 (蓝色虚线)
+        if analyzer.point_c_date:
+            fig.add_trace(
+                go.Scatter(
+                    x=[analyzer.swing_high_date, analyzer.point_c_date],
+                    y=[analyzer.swing_high, analyzer.point_c],
+                    mode='lines',
+                    name='BC回调',
+                    line=dict(color='rgba(0,128,255,0.5)', width=2, dash='dot')
+                ),
+                row=1, col=1
+            )
     
-    # 斐波那契水平
+    # 斐波那契水平线 - 使用add_shape确保可见
     if analyzer.result:
+        x_start = dates[0]
+        x_end = dates[-1]
+        
         for level, info in analyzer.result['levels'].items():
-            fig.add_hline(
-                y=info['price'],
-                line_dash="dash",
-                line_color=info['color'],
-                line_width=1,
-                annotation_text=f"{info['name']} (${info['price']:,.2f})",
-                annotation_position="right",
+            price = info['price']
+            color = info['color']
+            name = info['name']
+            
+            # 添加水平线 (使用shape确保贯穿整个图表)
+            fig.add_shape(
+                type="line",
+                x0=x_start, x1=x_end,
+                y0=price, y1=price,
+                line=dict(color=color, width=1.5, dash="dash"),
+                row=1, col=1
+            )
+            
+            # 添加右侧标注
+            fig.add_annotation(
+                x=x_end,
+                y=price,
+                text=f"  {name} ${price:,.2f}",
+                showarrow=False,
+                xanchor='left',
+                yanchor='middle',
+                font=dict(color=color, size=11, family='Arial'),
+                bgcolor='rgba(0,0,0,0.7)',
+                bordercolor=color,
+                borderwidth=1,
+                borderpad=2,
+                row=1, col=1
+            )
+            
+            # 添加左侧标注 (水平名称)
+            fig.add_annotation(
+                x=x_start,
+                y=price,
+                text=f"{name}  ",
+                showarrow=False,
+                xanchor='right',
+                yanchor='middle',
+                font=dict(color=color, size=10, family='Arial'),
                 row=1, col=1
             )
     
     # 当前价格线
     if current_price:
-        fig.add_hline(
+        fig.add_shape(
+            type="line",
+            x0=dates[0], x1=dates[-1],
+            y0=current_price, y1=current_price,
+            line=dict(color='#FFFFFF', width=2.5, dash='solid'),
+            row=1, col=1
+        )
+        fig.add_annotation(
+            x=dates[-1],
             y=current_price,
-            line_dash="solid",
-            line_color='#FFFFFF',
-            line_width=2,
-            annotation_text=f'当前 ${current_price:,.2f}',
-            annotation_position="right",
+            text=f"  当前 ${current_price:,.2f}",
+            showarrow=False,
+            xanchor='left',
+            yanchor='middle',
+            font=dict(color='#FFFFFF', size=12, family='Arial Black'),
+            bgcolor='rgba(255,255,255,0.2)',
+            bordercolor='#FFFFFF',
+            borderwidth=2,
+            borderpad=3,
             row=1, col=1
         )
     
@@ -752,32 +851,73 @@ def create_fib_chart(df, analyzer, current_price, metal, show_indicators=True, s
             go.Scatter(
                 x=dates, y=rsi,
                 name='RSI(14)',
-                line=dict(color='#E91E63', width=1.5)
+                line=dict(color='#E91E63', width=1.5),
+                fill='tozeroy',
+                fillcolor='rgba(233, 30, 99, 0.1)'
             ),
             row=2, col=1
         )
-        fig.add_hline(y=70, line_dash="dash", line_color='#FF4444', line_width=1, row=2, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color='#00FF00', line_width=1, row=2, col=1)
+        # RSI超买超卖线
+        fig.add_hline(y=70, line_dash="dash", line_color='#FF4444', line_width=1.5, 
+                      annotation_text="超买70", annotation_position="right", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color='#00FF00', line_width=1.5,
+                      annotation_text="超卖30", annotation_position="right", row=2, col=1)
+        fig.add_hrect(y0=30, y1=70, line_width=0, fillcolor="gray", opacity=0.1, row=2, col=1)
         fig.update_yaxes(range=[0, 100], row=2, col=1)
     
+    # 更新布局
     fig.update_layout(
-        height=700,
+        height=800,
         showlegend=True,
         template='plotly_dark',
-        paper_bgcolor='#1a1a2e',
-        plot_bgcolor='#16213e',
-        font=dict(color='white'),
+        paper_bgcolor='#0d1117',
+        plot_bgcolor='#161b22',
+        font=dict(color='white', family='Arial'),
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.02,
-            xanchor="right",
-            x=1
-        )
+            xanchor="left",
+            x=0,
+            bgcolor='rgba(0,0,0,0.5)',
+            bordercolor='rgba(255,255,255,0.2)',
+            borderwidth=1
+        ),
+        margin=dict(l=60, r=120, t=80, b=40),  # 右侧留出空间给标注
+        hovermode='x unified'
     )
     
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.3)')
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.3)')
+    # 更新X轴
+    fig.update_xaxes(
+        showgrid=True, 
+        gridwidth=1, 
+        gridcolor='rgba(128,128,128,0.2)',
+        rangeslider=dict(visible=False),
+        row=1, col=1
+    )
+    fig.update_xaxes(
+        showgrid=True, 
+        gridwidth=1, 
+        gridcolor='rgba(128,128,128,0.2)',
+        row=2, col=1
+    )
+    
+    # 更新Y轴
+    fig.update_yaxes(
+        showgrid=True, 
+        gridwidth=1, 
+        gridcolor='rgba(128,128,128,0.2)',
+        range=[y_min, y_max],
+        title_text="价格 (USD)",
+        row=1, col=1
+    )
+    fig.update_yaxes(
+        showgrid=True, 
+        gridwidth=1, 
+        gridcolor='rgba(128,128,128,0.2)',
+        title_text="RSI",
+        row=2, col=1
+    )
     
     return fig
 
@@ -912,7 +1052,7 @@ def main():
     init_session_state()
     
     # 标题
-    st.title("🥇 黄金斐波那契分析系统 v4.2")
+    st.title("🥇 黄金斐波那契分析系统 v4.3")
     st.caption("完全免费版 - 无需API Key | 智能识别ABC三点 | 数据源: Yahoo Finance / Metals.Live / FreeGoldAPI / Frankfurter")
     
     # 侧边栏 - 控制面板
