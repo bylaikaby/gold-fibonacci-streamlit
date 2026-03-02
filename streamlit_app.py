@@ -1,6 +1,7 @@
 """
-黄金斐波那契分析系统 v4.1 - Streamlit版
+黄金斐波那契分析系统 v4.2 - Streamlit版
 基于 fib_gui_best.py 转换
+支持自动识别 A/B/C 三点
 
 数据源:
 1. Yahoo Finance (yfinance) - 历史K线 + 实时价格
@@ -23,7 +24,7 @@ warnings.filterwarnings('ignore')
 
 # 设置页面配置（必须在其他st命令之前）
 st.set_page_config(
-    page_title="🥇 黄金斐波那契分析系统 v4.1",
+    page_title="🥇 黄金斐波那契分析系统 v4.2",
     page_icon="🥇",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -334,11 +335,11 @@ class FreeGoldFetcher:
 
 
 # ============================================
-# 斐波那契分析引擎
+# 斐波那契分析引擎 (增强版 - 自动识别ABC)
 # ============================================
 
 class FibonacciAnalyzer:
-    """斐波那契分析引擎"""
+    """斐波那契分析引擎 - 支持自动识别A/B/C三点"""
     
     RETRACEMENT = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
     EXTENSION = [0, 0.382, 0.618, 1.0, 1.272, 1.382, 1.618, 2.0, 2.618]
@@ -367,27 +368,105 @@ class FibonacciAnalyzer:
     
     def __init__(self):
         self.df = None
-        self.swing_low = None
-        self.swing_high = None
-        self.point_c = None
+        self.swing_low = None      # A点 - 起涨点
+        self.swing_high = None     # B点 - 波段高点
+        self.point_c = None        # C点 - 回调低点
+        self.swing_low_date = None
+        self.swing_high_date = None
+        self.point_c_date = None
         self.result = None
     
     def set_data(self, df: pd.DataFrame):
-        self.df = df
+        self.df = df.copy()
     
-    def find_swing_points(self):
-        """自动寻找波段高低点"""
+    def find_swing_points(self, use_pivot: bool = True, pivot_window: int = 5):
+        """
+        智能识别波段高低点 A/B/C
+        
+        策略:
+        1. 找到历史最高点 B
+        2. 在B之前找到最低点 A (起涨点)
+        3. 在B之后找到最低点 C (回调低点)
+        """
         if self.df is None or self.df.empty:
             return
         
-        self.swing_high = float(self.df['High'].max())
-        self.swing_low = float(self.df['Low'].min())
+        if use_pivot and len(self.df) > pivot_window * 2 + 1:
+            self._find_pivot_points(pivot_window)
+        else:
+            self._find_simple_points()
+    
+    def _find_pivot_points(self, window: int = 5):
+        """
+        使用Pivot Point算法识别波段点
+        """
+        df = self.df.copy()
         
-        # 尝试找C点 (最近的回调低点)
-        high_idx = self.df['High'].idxmax()
-        recent_data = self.df.loc[high_idx:]
-        if len(recent_data) > 1:
-            self.point_c = float(recent_data['Low'].min())
+        # 计算滚动最高/最低
+        roll_high = df['High'].rolling(window=window*2+1, center=True).max()
+        roll_low = df['Low'].rolling(window=window*2+1, center=True).min()
+        
+        # 识别Pivot High/Low
+        pivot_highs = df[df['High'] == roll_high]['High'].dropna()
+        pivot_lows = df[df['Low'] == roll_low]['Low'].dropna()
+        
+        if len(pivot_highs) == 0 or len(pivot_lows) == 0:
+            self._find_simple_points()
+            return
+        
+        # B点: 最近的Pivot High
+        self.swing_high_date = pivot_highs.index[-1]
+        self.swing_high = float(pivot_highs.iloc[-1])
+        
+        # A点: B点之前的Pivot Low
+        lows_before_b = pivot_lows[pivot_lows.index < self.swing_high_date]
+        if len(lows_before_b) > 0:
+            self.swing_low_date = lows_before_b.index[-1]
+            self.swing_low = float(lows_before_b.iloc[-1])
+        else:
+            # 如果没有pivot low，使用B点前的最低
+            before_b = df.loc[:self.swing_high_date]
+            self.swing_low_date = before_b['Low'].idxmin()
+            self.swing_low = float(before_b['Low'].min())
+        
+        # C点: B点之后的Pivot Low 或最近低点
+        after_b = df.loc[self.swing_high_date:]
+        if len(after_b) > 1:
+            # 找B点之后的最低点
+            self.point_c_date = after_b['Low'].idxmin()
+            self.point_c = float(after_b['Low'].min())
+            
+            # 如果C点就是B点，使用最新价格作为C
+            if self.point_c_date == self.swing_high_date:
+                self.point_c_date = df.index[-1]
+                self.point_c = float(df['Close'].iloc[-1])
+        else:
+            self.point_c_date = df.index[-1]
+            self.point_c = float(df['Close'].iloc[-1])
+    
+    def _find_simple_points(self):
+        """
+        简单方法识别波段点 (不使用pivot)
+        """
+        df = self.df
+        
+        # B点: 历史最高点
+        self.swing_high_date = df['High'].idxmax()
+        self.swing_high = float(df['High'].max())
+        
+        # A点: B点之前的最低点
+        before_b = df.loc[:self.swing_high_date]
+        self.swing_low_date = before_b['Low'].idxmin()
+        self.swing_low = float(before_b['Low'].min())
+        
+        # C点: B点之后的最低点
+        after_b = df.loc[self.swing_high_date:]
+        if len(after_b) > 1:
+            self.point_c_date = after_b['Low'].idxmin()
+            self.point_c = float(after_b['Low'].min())
+        else:
+            self.point_c_date = df.index[-1]
+            self.point_c = float(df['Close'].iloc[-1])
     
     def calculate_retracement(self, swing_low: float = None, 
                                swing_high: float = None) -> Optional[Dict]:
@@ -453,6 +532,14 @@ class FibonacciAnalyzer:
         }
         
         return self.result
+    
+    def get_abc_summary(self) -> Dict:
+        """获取ABC三点摘要"""
+        return {
+            'A': {'date': self.swing_low_date, 'price': self.swing_low},
+            'B': {'date': self.swing_high_date, 'price': self.swing_high},
+            'C': {'date': self.point_c_date, 'price': self.point_c},
+        }
 
 
 # ============================================
@@ -518,9 +605,11 @@ def init_session_state():
         st.session_state.current_metal = Metal.GOLD
     if 'data_source' not in st.session_state:
         st.session_state.data_source = None
+    if 'auto_detected' not in st.session_state:
+        st.session_state.auto_detected = False
 
 
-def create_fib_chart(df, analyzer, current_price, metal, show_indicators=True):
+def create_fib_chart(df, analyzer, current_price, metal, show_indicators=True, show_abc=True):
     """创建斐波那契图表"""
     if not HAS_PLOTLY or df is None:
         return None
@@ -565,6 +654,68 @@ def create_fib_chart(df, analyzer, current_price, metal, show_indicators=True):
                 x=dates, y=ma50,
                 name='MA50',
                 line=dict(color='#2196F3', width=1)
+            ),
+            row=1, col=1
+        )
+    
+    # 标记 A/B/C 三点
+    if show_abc and analyzer.swing_low_date and analyzer.swing_high_date:
+        # A点 - 起涨点 (绿色)
+        if analyzer.swing_low_date in df.index:
+            fig.add_trace(
+                go.Scatter(
+                    x=[analyzer.swing_low_date],
+                    y=[analyzer.swing_low],
+                    mode='markers+text',
+                    name='A点 (起涨)',
+                    marker=dict(size=15, color='#00FF00', symbol='circle'),
+                    text=['A'],
+                    textposition='bottom center',
+                    textfont=dict(size=14, color='#00FF00', weight='bold')
+                ),
+                row=1, col=1
+            )
+        
+        # B点 - 波段高点 (红色)
+        if analyzer.swing_high_date in df.index:
+            fig.add_trace(
+                go.Scatter(
+                    x=[analyzer.swing_high_date],
+                    y=[analyzer.swing_high],
+                    mode='markers+text',
+                    name='B点 (高点)',
+                    marker=dict(size=15, color='#FF0000', symbol='circle'),
+                    text=['B'],
+                    textposition='top center',
+                    textfont=dict(size=14, color='#FF0000', weight='bold')
+                ),
+                row=1, col=1
+            )
+        
+        # C点 - 回调低点 (蓝色)
+        if analyzer.point_c_date and analyzer.point_c_date in df.index:
+            fig.add_trace(
+                go.Scatter(
+                    x=[analyzer.point_c_date],
+                    y=[analyzer.point_c],
+                    mode='markers+text',
+                    name='C点 (回调)',
+                    marker=dict(size=15, color='#0080FF', symbol='circle'),
+                    text=['C'],
+                    textposition='bottom center',
+                    textfont=dict(size=14, color='#0080FF', weight='bold')
+                ),
+                row=1, col=1
+            )
+        
+        # 画AB连线
+        fig.add_trace(
+            go.Scatter(
+                x=[analyzer.swing_low_date, analyzer.swing_high_date],
+                y=[analyzer.swing_low, analyzer.swing_high],
+                mode='lines',
+                name='AB波段',
+                line=dict(color='rgba(255,255,0,0.5)', width=2, dash='dash')
             ),
             row=1, col=1
         )
@@ -695,6 +846,9 @@ def generate_signals(current_price, analyzer, metal):
     supports.sort(key=lambda x: x[1]['price'], reverse=True)
     resistances.sort(key=lambda x: x[1]['price'])
     
+    # 获取ABC信息
+    abc = analyzer.get_abc_summary()
+    
     text = f"""
 ╔════════════════════════════════════════════════╗
 ║         🎯 {metal.cn_name}交易建议                          
@@ -702,6 +856,14 @@ def generate_signals(current_price, analyzer, metal):
 ╚════════════════════════════════════════════════╝
 
 当前价格: ${current_price:,.2f}
+
+【ABC波段分析】
+  A点 (起涨):  ${abc['A']['price']:,.2f}  [{abc['A']['date'].strftime('%m-%d') if abc['A']['date'] else '--'}]
+  B点 (高点):  ${abc['B']['price']:,.2f}  [{abc['B']['date'].strftime('%m-%d') if abc['B']['date'] else '--'}]
+  C点 (回调):  ${abc['C']['price']:,.2f}  [{abc['C']['date'].strftime('%m-%d') if abc['C']['date'] else '--'}]
+  
+  AB涨幅:      {((abc['B']['price'] - abc['A']['price']) / abc['A']['price'] * 100):.2f}%
+  BC回调:      {((abc['B']['price'] - abc['C']['price']) / (abc['B']['price'] - abc['A']['price']) * 100):.1f}%
 
 {'─'*48}
 📉 支撑位 (买入区域)
@@ -750,8 +912,8 @@ def main():
     init_session_state()
     
     # 标题
-    st.title("🥇 黄金斐波那契分析系统 v4.1")
-    st.caption("完全免费版 - 无需API Key | 数据源: Yahoo Finance / Metals.Live / FreeGoldAPI / Frankfurter")
+    st.title("🥇 黄金斐波那契分析系统 v4.2")
+    st.caption("完全免费版 - 无需API Key | 智能识别ABC三点 | 数据源: Yahoo Finance / Metals.Live / FreeGoldAPI / Frankfurter")
     
     # 侧边栏 - 控制面板
     with st.sidebar:
@@ -781,12 +943,53 @@ def main():
         
         st.divider()
         
+        # 智能识别设置
+        st.subheader("🔍 智能识别设置")
+        use_pivot = st.checkbox("使用Pivot算法", value=True, 
+                                help="使用更精确的Pivot Point算法识别波段点")
+        pivot_window = st.slider("Pivot窗口", min_value=2, max_value=10, value=5,
+                                 help="窗口越大，识别的波段点越少但越重要")
+        
+        st.divider()
+        
         # 斐波那契参数
         st.subheader("📐 斐波那契参数")
         
-        low_input = st.text_input("低点A", value="自动", help="输入数值或留空使用自动检测")
-        high_input = st.text_input("高点B", value="自动", help="输入数值或留空使用自动检测")
-        c_input = st.text_input("C点 (扩展分析用)", value="", help="扩展分析需要输入C点")
+        # 显示自动识别的值
+        analyzer = st.session_state.analyzer
+        
+        col_a1, col_a2 = st.columns([1, 2])
+        with col_a1:
+            st.markdown("**A点 (低点)**")
+        with col_a2:
+            if analyzer.swing_low:
+                st.markdown(f"<span style='color:#00FF00'>${analyzer.swing_low:,.2f}</span>", unsafe_allow_html=True)
+        
+        low_input = st.text_input("A点价格 (覆盖自动值)", value="", 
+                                  placeholder=f"自动: {analyzer.swing_low:.2f}" if analyzer.swing_low else "自动",
+                                  help="留空使用自动识别的A点")
+        
+        col_b1, col_b2 = st.columns([1, 2])
+        with col_b1:
+            st.markdown("**B点 (高点)**")
+        with col_b2:
+            if analyzer.swing_high:
+                st.markdown(f"<span style='color:#FF0000'>${analyzer.swing_high:,.2f}</span>", unsafe_allow_html=True)
+        
+        high_input = st.text_input("B点价格 (覆盖自动值)", value="",
+                                   placeholder=f"自动: {analyzer.swing_high:.2f}" if analyzer.swing_high else "自动",
+                                   help="留空使用自动识别的B点")
+        
+        col_c1, col_c2 = st.columns([1, 2])
+        with col_c1:
+            st.markdown("**C点 (回调)**")
+        with col_c2:
+            if analyzer.point_c:
+                st.markdown(f"<span style='color:#0080FF'>${analyzer.point_c:,.2f}</span>", unsafe_allow_html=True)
+        
+        c_input = st.text_input("C点价格 (扩展分析用)", value="",
+                                placeholder=f"自动: {analyzer.point_c:.2f}" if analyzer.point_c else "自动",
+                                help="留空使用自动识别的C点 (扩展分析需要)")
         
         st.divider()
         
@@ -808,9 +1011,10 @@ def main():
                         # 自动识别波段点
                         analyzer = st.session_state.analyzer
                         analyzer.set_data(df)
-                        analyzer.find_swing_points()
+                        analyzer.find_swing_points(use_pivot=use_pivot, pivot_window=pivot_window)
+                        st.session_state.auto_detected = True
                         
-                        st.success(f"✅ 成功获取 {len(df)} 条数据")
+                        st.success(f"✅ 成功获取 {len(df)} 条数据\n🔍 已自动识别ABC三点")
                     else:
                         st.error("❌ 无法获取数据")
         
@@ -832,7 +1036,7 @@ def main():
         st.divider()
         
         # 分析按钮
-        st.subheader("🔍 分析")
+        st.subheader("📊 分析")
         
         col3, col4 = st.columns(2)
         with col3:
@@ -840,14 +1044,14 @@ def main():
                 analyzer = st.session_state.analyzer
                 
                 try:
-                    swing_low = analyzer.swing_low if low_input == "自动" or not low_input else float(low_input)
-                    swing_high = analyzer.swing_high if high_input == "自动" or not high_input else float(high_input)
+                    swing_low = float(low_input) if low_input else analyzer.swing_low
+                    swing_high = float(high_input) if high_input else analyzer.swing_high
                     
                     if swing_low and swing_high:
                         analyzer.calculate_retracement(swing_low, swing_high)
                         st.success("✅ 回调分析完成")
                     else:
-                        st.warning("⚠️ 请先获取数据")
+                        st.warning("⚠️ 请先获取数据或输入A/B点")
                 except ValueError:
                     st.error("❌ 请输入有效数字")
         
@@ -855,47 +1059,58 @@ def main():
             if st.button("🎯 扩展分析", type="primary", use_container_width=True):
                 analyzer = st.session_state.analyzer
                 
-                if not c_input:
-                    st.warning("⚠️ 扩展分析需要输入C点")
-                else:
-                    try:
-                        point_a = analyzer.swing_low if low_input == "自动" or not low_input else float(low_input)
-                        point_b = analyzer.swing_high if high_input == "自动" or not high_input else float(high_input)
-                        point_c = float(c_input)
-                        
+                try:
+                    point_a = float(low_input) if low_input else analyzer.swing_low
+                    point_b = float(high_input) if high_input else analyzer.swing_high
+                    point_c = float(c_input) if c_input else analyzer.point_c
+                    
+                    if all([point_a, point_b, point_c]):
                         analyzer.calculate_extension(point_a, point_b, point_c)
                         st.success("✅ 扩展分析完成")
-                    except ValueError:
-                        st.error("❌ 请输入有效数字")
+                    else:
+                        st.warning("⚠️ 扩展分析需要A/B/C三点")
+                except ValueError:
+                    st.error("❌ 请输入有效数字")
         
-        if st.button("🔍 智能识别波段点", use_container_width=True):
-            if st.session_state.df is not None:
+        # 一键分析按钮
+        if st.button("🚀 一键分析 (自动识别+计算)", use_container_width=True, 
+                    help="自动识别ABC三点并执行回调和扩展分析"):
+            if st.session_state.df is None:
+                st.error("❌ 请先获取数据")
+            else:
                 analyzer = st.session_state.analyzer
-                analyzer.set_data(st.session_state.df)
-                analyzer.find_swing_points()
                 
-                # 更新输入框的值
-                if analyzer.swing_low:
-                    st.session_state.swing_low_value = f"{analyzer.swing_low:.2f}"
-                if analyzer.swing_high:
-                    st.session_state.swing_high_value = f"{analyzer.swing_high:.2f}"
-                if analyzer.point_c:
-                    st.session_state.point_c_value = f"{analyzer.point_c:.2f}"
+                # 确保已识别波段点
+                if not st.session_state.auto_detected:
+                    analyzer.set_data(st.session_state.df)
+                    analyzer.find_swing_points(use_pivot=use_pivot, pivot_window=pivot_window)
                 
-                st.success("✅ 智能识别完成")
-                st.rerun()
+                # 执行回调分析
+                if analyzer.swing_low and analyzer.swing_high:
+                    analyzer.calculate_retracement(analyzer.swing_low, analyzer.swing_high)
+                    
+                    # 执行扩展分析 (如果有C点)
+                    if analyzer.point_c:
+                        analyzer.calculate_extension(analyzer.swing_low, analyzer.swing_high, analyzer.point_c)
+                        st.success("✅ 回调分析 + 扩展分析完成")
+                    else:
+                        st.success("✅ 回调分析完成 (无C点)")
+                else:
+                    st.error("❌ 无法识别波段点")
         
         st.divider()
         
         # 显示选项
         st.subheader("👁️ 显示选项")
         show_indicators = st.checkbox("显示技术指标", value=True)
+        show_abc = st.checkbox("显示ABC标记", value=True)
     
     # 主内容区
     # 价格信息栏
     metal = st.session_state.current_metal
     current_price = st.session_state.current_price
     data_source = st.session_state.data_source
+    analyzer = st.session_state.analyzer
     
     col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
     
@@ -927,6 +1142,57 @@ def main():
         else:
             st.metric(label="数据点", value="--")
     
+    # ABC三点信息卡片
+    if analyzer.swing_low and analyzer.swing_high:
+        st.divider()
+        abc_cols = st.columns(4)
+        
+        with abc_cols[0]:
+            st.markdown("""
+            <div style='background:#1a1a2e;padding:10px;border-radius:5px;border-left:4px solid #00FF00'>
+            <b style='color:#00FF00'>A点 (起涨)</b><br>
+            <span style='font-size:1.2em'>${:.2f}</span><br>
+            <small>{}</small>
+            </div>
+            """.format(analyzer.swing_low, 
+                      analyzer.swing_low_date.strftime('%Y-%m-%d') if analyzer.swing_low_date else '--'), 
+                      unsafe_allow_html=True)
+        
+        with abc_cols[1]:
+            st.markdown("""
+            <div style='background:#1a1a2e;padding:10px;border-radius:5px;border-left:4px solid #FF0000'>
+            <b style='color:#FF0000'>B点 (高点)</b><br>
+            <span style='font-size:1.2em'>${:.2f}</span><br>
+            <small>{}</small>
+            </div>
+            """.format(analyzer.swing_high,
+                      analyzer.swing_high_date.strftime('%Y-%m-%d') if analyzer.swing_high_date else '--'),
+                      unsafe_allow_html=True)
+        
+        with abc_cols[2]:
+            c_price = analyzer.point_c if analyzer.point_c else current_price
+            c_date = analyzer.point_c_date if analyzer.point_c_date else (df.index[-1] if df is not None else None)
+            st.markdown("""
+            <div style='background:#1a1a2e;padding:10px;border-radius:5px;border-left:4px solid #0080FF'>
+            <b style='color:#0080FF'>C点 (回调)</b><br>
+            <span style='font-size:1.2em'>${:.2f}</span><br>
+            <small>{}</small>
+            </div>
+            """.format(c_price,
+                      c_date.strftime('%Y-%m-%d') if c_date else '--'),
+                      unsafe_allow_html=True)
+        
+        with abc_cols[3]:
+            if analyzer.swing_low and analyzer.swing_high and analyzer.point_c:
+                retracement = (analyzer.swing_high - analyzer.point_c) / (analyzer.swing_high - analyzer.swing_low) * 100
+                st.markdown("""
+                <div style='background:#1a1a2e;padding:10px;border-radius:5px;border-left:4px solid #FFD700'>
+                <b style='color:#FFD700'>BC回调幅度</b><br>
+                <span style='font-size:1.2em'>{:.1f}%</span><br>
+                <small>of AB波段</small>
+                </div>
+                """.format(retracement), unsafe_allow_html=True)
+    
     st.divider()
     
     # 创建标签页
@@ -940,7 +1206,7 @@ def main():
         analyzer = st.session_state.analyzer
         
         if df is not None and HAS_PLOTLY:
-            fig = create_fib_chart(df, analyzer, current_price, metal, show_indicators)
+            fig = create_fib_chart(df, analyzer, current_price, metal, show_indicators, show_abc)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1008,6 +1274,8 @@ def main():
     ⚠️ **风险提示**: 本工具仅供学习和研究使用，不构成任何投资建议。投资有风险，入市需谨慎。
     
     📡 **数据源**: Yahoo Finance (yfinance) | Metals.Live API | FreeGoldAPI.com | Frankfurter API
+    
+    🔍 **智能识别**: 使用Pivot Point算法自动识别ABC三点，支持斐波那契回调和扩展分析
     """)
 
 
